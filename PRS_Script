@@ -1,0 +1,131 @@
+wget https://s3.amazonaws.com/plink2-assets/alpha3/plink2_linux_x86_64_20220603.zip
+unzip plink2_linux_x86_64_20220603.zip
+rm plink2_linux_x86_64_20220603.zip
+
+# Run it
+
+./plink2
+
+
+# Convert to plink (just chromosome 22)
+
+for i in {1..22} X; do
+  ./plink2 \
+    --vcf chr"$i".dose.vcf.gz \
+    --make-pgen \
+    --out bychr"$i"
+done
+
+ls -l bychr*
+
+# Filter imputed SNPs by AvgCall > 0.9 and Rsq > 0.5
+
+for f in chr*.info.gz; do
+  g=$(basename $f .info.gz)
+  echo "$g"
+  gunzip -c "$f" | awk -F"\t" '$6 >= 0.9 && $7 > 0.5 { print $1 }' > by"$g".snps.txt
+done
+
+ls -l *.snps.txt
+
+# Filter plink2 files to just those SNPs
+
+for f in *.pgen; do
+  g=$(basename $f .pgen)
+  echo "$g"
+  ./plink2 \
+    --pfile "$g" \
+    --extract "$g".snps.txt \
+    --make-pgen \
+    --out "$g".qc
+done
+
+ls -l *.qc.pgen
+
+
+# Combine these 23 files into 1
+
+rm mergelist.txt
+for f in *.qc.pgen; do
+  g=$(basename $f .pgen)
+  echo "$g"
+  echo "$g" >> mergelist.txt
+done
+
+cat mergelist.txt
+
+./plink2 \
+ --pmerge-list mergelist.txt \
+ --make-pgen \
+ --out pacific
+rm mergelist.txt
+
+ls -l pacific*
+
+# Calculating PRS with plink2: https://www.cog-genomics.org/plink/2.0/score
+
+head -100 bychr1.pvar
+
+scores = read.table(gzfile("PGS002237.txt.gz"), header = TRUE)
+
+SNPname1 = paste(scores$chr_name,
+                 scores$chr_position,
+                 scores$effect_allele,
+                 scores$other_allele,
+                 sep = ":");
+SNPname2 = paste(scores$chr_name,
+                 scores$chr_position,
+                 scores$other_allele,
+                 scores$effect_allele,
+                 sep = ":");
+
+
+scores1 = scores;
+scores1$SNPname = SNPname1;
+
+scores2 = scores;
+scores2$SNPname = SNPname2;
+
+out = rbind(scores1, scores2);
+
+write.table(
+  file = "PGS002237_SNPs.txt",
+  x = out,
+  quote = FALSE,
+  sep = '\t
+  row.names = FALSE)
+
+
+# Score with plink2
+
+./plink2 \
+  --pfile pacific \
+  --score PGS002237_SNPs.txt 6 3 5 \
+  --out PRS
+
+
+head PRS.sscore
+
+# Get plink 1.9
+
+
+wget https://s3.amazonaws.com/plink1-assets/plink_linux_x86_64_20220402.zip
+unzip plink_linux_x86_64_20220402.zip
+rm plink_linux_x86_64_20220402.zip
+
+
+# PCA
+
+./plink2 --pfile pacific --make-bed --out pacific_plink1
+
+./plink \
+      --bfile pacific_plink1 \
+      --indep-pairphase 1000 10 0.2 \
+      --maf 0.01 \
+      --allow-no-sex \
+      --out pruning
+
+head pruning.prune.in
+
+./plink2 --pfile pacific --extract pruning.prune.in --pca --chr 1-22 --out pca
+
